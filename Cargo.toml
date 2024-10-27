@@ -4,4 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-iced = "0.12.1"
+iced = { version = "0.12.1", features = ["tokio"] }
+tokio = { version = "1.41.0", features = ["fs","rt"] }
+log = "0.4.22"
+rfd = "0.15.0"
