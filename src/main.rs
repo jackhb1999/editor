@@ -1,21 +1,27 @@
+use std::ffi;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use iced::{executor, Application, Command, Element, Length, Sandbox, Settings, Theme};
+use iced::{executor, application, Task, Element, Length, Settings, Theme, highlighter, Font};
 
-use iced::widget::{container, row, text, column, horizontal_space, button};
+use iced::widget::{container, row, text, column, horizontal_space, button, pick_list, tooltip};
 
 use iced::widget::text_editor;
-
+use iced::widget::tooltip::Position;
+use crate::Message::Edit;
 
 fn main() -> iced::Result {
-    Editor::run(Settings::default())
+    application(Editor::title, Editor::update, Editor::view)
+        .theme(Editor::theme)
+        .font(include_bytes!("../icon_fonts/fontello.ttf").as_slice())
+        .run_with(Editor::new)
 }
 
 struct Editor {
     content: text_editor::Content,
     error: Option<Error>,
     path: Option<PathBuf>,
+    theme: highlighter::Theme,
 }
 
 #[derive(Debug, Clone)]
@@ -26,25 +32,40 @@ enum Message {
     New,
     Save,
     FileSaved(Result<PathBuf, Error>),
-
+    ThemeSeleceted(highlighter::Theme),
 }
 
-impl Application for Editor {
-    type Executor = executor::Default;
-    type Message = Message;
+fn icon<'a, Message>(uncode_point: char) -> Element<'a, Message> {
+    const ICON_FONT: Font = Font::with_name("fontello");
+    text(uncode_point).font(ICON_FONT).into()
+}
 
-    type Theme = Theme;
+fn new_icon<'a, Message>() -> Element<'a, Message> {
+    icon('\u{E831}')
+}
 
-    type Flags = ();
+fn save_icon<'a, Message>() -> Element<'a, Message> {
+    icon('\u{E800}')
+}
+
+fn button_tooltip<'a>(content: Element<'a, Message>, label: &'a str, on_press: Message) -> Element<'a, Message> {
+    tooltip(button(container(content).center_x(20))
+                .padding([5,6])
+                .on_press(on_press), label, Position::FollowCursor)
+        .style(container::rounded_box)
+        .into()
+}
 
 
-    fn new(flages: Self::Flags) -> (Self, Command<Self::Message>) {
+impl Editor {
+    fn new() -> (Self, Task<Message>) {
         (
             Self {
                 content: text_editor::Content::new(),
                 error: None,
                 path: None,
-            }, Command::perform(load_file(default_load_file()), Message::FileOpened)
+                theme: highlighter::Theme::SolarizedDark,
+            }, Task::perform(load_file(default_load_file()), Message::FileOpened)
         )
     }
 
@@ -52,53 +73,64 @@ impl Application for Editor {
         String::from("This is a text editor.")
     }
 
-    fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
+    fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Edit(action) => {
                 self.content.perform(action);
-                Command::none()
+                Task::none()
             }
             Message::FileOpened(Ok((path, content))) => {
                 self.content = text_editor::Content::with_text(&content);
                 self.path = Some(path);
-                Command::none()
+                Task::none()
             }
             Message::FileOpened(Err(error)) => {
                 self.error = Some(error);
-                Command::none()
+                Task::none()
             }
             Message::Open => {
-                Command::perform(pick_file(), Message::FileOpened)
+                Task::perform(pick_file(), Message::FileOpened)
             }
             Message::New => {
                 self.content = text_editor::Content::new();
                 self.path = None;
-                Command::none()
+                Task::none()
             }
             Message::Save => {
                 let content = self.content.text();
-                Command::perform(save_file(self.path.clone(), content), Message::FileSaved)
+                Task::perform(save_file(self.path.clone(), content), Message::FileSaved)
             }
             Message::FileSaved(Ok(path)) => {
                 self.path = Some(path);
-                Command::none()
+                Task::none()
             }
             Message::FileSaved(Err(error)) => {
                 self.error = Some(error);
-                Command::none()
+                Task::none()
+            }
+            Message::ThemeSeleceted(theme) => {
+                self.theme = theme;
+                Task::none()
             }
         }
     }
 
-    fn view(&self) -> Element<'_, Self::Message> {
-        let controls = row!(
+    fn view(&self) -> Element<'_, Message> {
+        let controls = row![
             button("Open").on_press(Message::Open),
-            button("New").on_press(Message::New),
-            button("Save").on_press(Message::Save)
-        ).spacing(10);
+            button(new_icon()).on_press(Message::New),
+            button_tooltip(save_icon(),"Save File",Message::Save),
+            horizontal_space(),
+            pick_list(highlighter::Theme::ALL,Some(self.theme),Message::ThemeSeleceted)
+        ].spacing(10);
         let input_content = text_editor(&self.content)
             .on_action(Message::Edit)
-            .height(Length::Fill);
+            .height(Length::Fill)
+            .highlight(self.path.as_deref()
+                           .and_then(Path::extension)
+                           .and_then(ffi::OsStr::to_str)
+                           .unwrap_or("rs"),
+                       self.theme);
         let position = {
             let (line, column) = &self.content.cursor_position();
             text(format!("{}:{}", line + 1, column + 1))
@@ -115,12 +147,16 @@ impl Application for Editor {
                 }
             }
         };
-        let status_bar = row!(file_path,horizontal_space(),position);
-        container(column!(controls,input_content,status_bar)).padding(5).into()
+        let status_bar = row![file_path,horizontal_space(),position];
+        container(column![controls,input_content,status_bar]).padding(5).into()
     }
 
     fn theme(&self) -> Theme {
-        Theme::Dark
+        if self.theme.is_dark() {
+            Theme::Dark
+        } else {
+            Theme::Light
+        }
     }
 }
 
